@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Đế Chế Vỉa Hè - Siêu Tool Auto & Tiện Ích
 // @namespace    https://decheviahe.com/
-// @version      2.2.0
+// @version      2.2.1
 // @description  Tự động Mời Nước, Mời Ghé, Hỏi Nhà, Nhận Giftcode 21 triệu vốn, Soi tiến độ mặt bằng, Sao lưu save game và Tua nhanh tốc độ
 // @author       Antigravity
 // @match        https://decheviahe.com/*
@@ -20,13 +20,21 @@
   let isRunning = false;
   let shouldStop = false;
 
-  // Lấy số tiền hiện có từ sim (trong game biến tiền là sim.coins)
+  // Lấy số tiền hiện có từ sim (trong game biến tiền là sim.coins, fallback đọc từ save)
   function getPlayerCoins(sim) {
-    if (!sim) return 0;
-    if (typeof sim.coins === 'number') return sim.coins;
-    if (typeof sim.st?.coins === 'number') return sim.st.coins;
-    if (typeof sim.cash === 'number') return sim.cash;
-    if (typeof sim.st?.cash === 'number') return sim.st.cash;
+    if (sim) {
+      if (typeof sim.coins === 'number') return sim.coins;
+      if (typeof sim.st?.coins === 'number') return sim.st.coins;
+      if (typeof sim.cash === 'number') return sim.cash;
+      if (typeof sim.st?.cash === 'number') return sim.st.cash;
+    }
+    try {
+      const raw = localStorage.getItem('de-che-via-he/save/v3');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.coins === 'number') return parsed.coins;
+      }
+    } catch (e) {}
     return 0;
   }
 
@@ -43,8 +51,53 @@
     }
   }
 
-  // Quét đối tượng sim từ React Fiber
+  // Quét đối tượng sim từ React 18 Fiber & Containers
   function extractSimFromDom() {
+    const roots = [
+      document.getElementById('journal-root'),
+      document.getElementById('books-root'),
+      document.getElementById('app'),
+      document.body
+    ].filter(Boolean);
+
+    for (const root of roots) {
+      const candidates = [root, ...(root.querySelectorAll ? root.querySelectorAll('*') : [])];
+      for (const el of candidates) {
+        for (const k of Object.keys(el)) {
+          // React 18 container root
+          if (k.startsWith('__reactContainer$')) {
+            let fiber = el[k]?.current;
+            let depth = 0;
+            while (fiber && depth < 25) {
+              depth++;
+              if (fiber.memoizedProps?.sim && typeof fiber.memoizedProps.sim.dealTargets === 'function') {
+                cachedSim = fiber.memoizedProps.sim;
+                window.__dcvh_sim = cachedSim;
+                applyTimeMultiplier(cachedSim, window.__timeMultiplier);
+                return cachedSim;
+              }
+              fiber = fiber.child;
+            }
+          }
+          // React Fiber component
+          if (k.startsWith('__reactFiber$')) {
+            let fiber = el[k];
+            let depth = 0;
+            while (fiber && depth < 30) {
+              depth++;
+              if (fiber.memoizedProps?.sim && typeof fiber.memoizedProps.sim.dealTargets === 'function') {
+                cachedSim = fiber.memoizedProps.sim;
+                window.__dcvh_sim = cachedSim;
+                applyTimeMultiplier(cachedSim, window.__timeMultiplier);
+                return cachedSim;
+              }
+              fiber = fiber.return || fiber.child;
+            }
+          }
+        }
+      }
+    }
+
     if (cachedSim && typeof cachedSim.dealTargets === 'function') return cachedSim;
     if (window.__dcvh_sim && typeof window.__dcvh_sim.dealTargets === 'function') {
       cachedSim = window.__dcvh_sim;
@@ -56,41 +109,20 @@
       return cachedSim;
     }
 
-    const journalRoot = document.getElementById('journal-root') || document.getElementById('app') || document.body;
-    if (journalRoot) {
-      const candidates = [journalRoot, ...journalRoot.querySelectorAll('*')];
-      for (const el of candidates) {
-        const fiberKey = Object.keys(el).find(
-          k => k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$') || k.startsWith('__reactProps$')
-        );
-        if (fiberKey) {
-          let node = el[fiberKey];
-          let depth = 0;
-          while (node && depth < 30) {
-            depth++;
-            const props = node.memoizedProps;
-            if (props && props.sim && typeof props.sim.dealTargets === 'function') {
-              cachedSim = props.sim;
-              window.__dcvh_sim = cachedSim;
-              applyTimeMultiplier(cachedSim, window.__timeMultiplier);
-              return cachedSim;
-            }
-            node = node.return || node.child;
-          }
-        }
-      }
-    }
     return null;
   }
 
   // Lắng nghe khi DOM thay đổi để bắt `sim` ngay khi mở Sổ tay
   const domObserver = new MutationObserver(() => {
-    if (!cachedSim) {
-      const sim = extractSimFromDom();
-      if (sim) updateWidgetStatus(true);
-    }
+    const sim = extractSimFromDom();
+    if (sim) updateWidgetStatus();
   });
   domObserver.observe(document.documentElement, { childList: true, subtree: true });
+
+  // Tự động kiểm tra & cập nhật định kỳ mỗi 1 giây
+  setInterval(() => {
+    updateWidgetStatus();
+  }, 1000);
 
   function getAllResidents(sim) {
     const allIds = new Set();
@@ -468,14 +500,15 @@
     const statusText = document.getElementById('dcvh-status-text');
     const cashText = document.getElementById('dcvh-cash-text');
 
+    const coins = getPlayerCoins(sim);
+    if (cashText) {
+      cashText.textContent = `${Math.floor(coins).toLocaleString('vi-VN')}k`;
+    }
+
     if (sim) {
       if (statusText) {
-        statusText.textContent = '✅ Đã kết nối';
+        statusText.textContent = `✅ Đã kết nối (Ngày ${sim.day || 1})`;
         statusText.style.color = '#4e8b46';
-      }
-      if (cashText) {
-        const coins = getPlayerCoins(sim);
-        cashText.textContent = `${Math.floor(coins).toLocaleString('vi-VN')}k`;
       }
     } else {
       if (statusText) {
