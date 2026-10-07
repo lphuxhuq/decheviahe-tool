@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Đế Chế Vỉa Hè - Siêu Tool Auto & Tiện Ích PRO
 // @namespace    https://decheviahe.com/
-// @version      3.1.0
-// @description  Tự động Mời Nước (tùy chọn số lượng), Auto Click Event trên màn hình, Mời Ghé, Hỏi Nhà, Quản lý Mặt Bằng, Bảo vệ vốn, Nhận Giftcode, Sao lưu Save game và Điều tốc mượt mà
+// @version      3.2.0
+// @description  Tự động Mời Nước (tùy chọn số lượng), Auto Click Event thông minh (Smart Event Engine), Mời Ghé, Hỏi Nhà, Quản lý Mặt Bằng, Bảo vệ vốn, Nhận Giftcode, Sao lưu Save game và Điều tốc mượt mà
 // @author       Antigravity
 // @match        https://decheviahe.com/*
 // @updateURL    https://raw.githubusercontent.com/lphuxhuq/decheviahe-tool/main/decheviahe_auto_invite.user.js
@@ -30,6 +30,7 @@
     maxTreatCount: 0,      // Giới hạn số người mời nước (0 = không giới hạn)
     autoClickEvents: false,// Tự động click sự kiện & bong bóng trên màn hình (mặc định tắt, người dùng bật khi cần)
     autoClickChoices: true,// Tự động chọn phương án trong hộp thoại sự kiện
+    eventChoiceStrategy: 'smart', // 'smart' | 'safe' | 'first' | 'manual'
     autoClickBubbles: true,// Tự động click bong bóng/quà nổi trên màn hình
     minCashReserve: 20,    // Giữ lại tối thiểu bao nhiêu k tiền mặt
     actionDelay: 200,      // Độ trễ giữa các hành động (ms)
@@ -668,7 +669,7 @@
       <div class="dcvh-header-title">
         <span>☕</span>
         <span>Đế Chế Vỉa Hè PRO</span>
-        <span style="font-size: 10px; background: rgba(255,255,255,0.25); padding: 1px 5px; border-radius: 4px;">v3.1</span>
+        <span style="font-size: 10px; background: rgba(255,255,255,0.25); padding: 1px 5px; border-radius: 4px;">v3.2</span>
       </div>
       <div class="dcvh-header-tools">
         <button class="dcvh-icon-btn" id="dcvh-btn-clearlog" title="Xóa nhật ký">🧹</button>
@@ -743,6 +744,15 @@
               <input type="checkbox" id="dcvh-act-events" ${userConfig.autoClickEvents ? 'checked' : ''} />
               <b style="color: #94321c;">🎯 Tự động click Sự Kiện / Bong bóng trên màn hình</b>
             </label>
+            <div id="dcvh-event-strategy-row" style="display: flex; justify-content: space-between; align-items: center; padding-left: 20px; margin-bottom: 2px;">
+              <span style="font-size: 11px; color: #6d4b29; font-weight: 600;">↳ Chiến lược chọn:</span>
+              <select id="dcvh-event-strategy" class="dcvh-input" style="width: 150px; padding: 2px 4px; font-size: 10.5px;">
+                <option value="smart" ${userConfig.eventChoiceStrategy === 'smart' ? 'selected' : ''}>🧠 Thông minh (Ưu tiên Quan hệ)</option>
+                <option value="safe" ${userConfig.eventChoiceStrategy === 'safe' ? 'selected' : ''}>🛡️ An toàn (Tránh mất tiền)</option>
+                <option value="first" ${userConfig.eventChoiceStrategy === 'first' ? 'selected' : ''}>⏩ Luôn chọn phương án 1</option>
+                <option value="manual" ${userConfig.eventChoiceStrategy === 'manual' ? 'selected' : ''}>✋ Bỏ qua (Tự bấm tay)</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -926,6 +936,14 @@
   if (actEventsEl) {
     actEventsEl.onchange = () => {
       userConfig.autoClickEvents = actEventsEl.checked;
+      saveUserConfig();
+    };
+  }
+
+  const eventStrategyEl = document.getElementById('dcvh-event-strategy');
+  if (eventStrategyEl) {
+    eventStrategyEl.onchange = () => {
+      userConfig.eventChoiceStrategy = eventStrategyEl.value;
       saveUserConfig();
     };
   }
