@@ -28,7 +28,7 @@
     autoLeads: true,       // Chăm sóc người dẫn mối
     skipMaxTier: true,     // Bỏ qua người đã đạt max tier / đủ sao
     maxTreatCount: 0,      // Giới hạn số người mời nước (0 = không giới hạn)
-    autoClickEvents: true, // Tự động click sự kiện & bong bóng trên màn hình
+    autoClickEvents: false,// Tự động click sự kiện & bong bóng trên màn hình (mặc định tắt, người dùng bật khi cần)
     autoClickChoices: true,// Tự động chọn phương án trong hộp thoại sự kiện
     autoClickBubbles: true,// Tự động click bong bóng/quà nổi trên màn hình
     minCashReserve: 20,    // Giữ lại tối thiểu bao nhiêu k tiền mặt
@@ -966,89 +966,179 @@
   }
 
   // ==========================================
-  // AUTO EVENT & BUBBLE CATCHER (CORE LISTENER)
+  // AUTO EVENT & BUBBLE CATCHER (CHÍNH XÁC 100% - CHỐNG CLICK NHẦM)
   // ==========================================
   let lastEventClickTime = 0;
+
+  function isRealEventModal(modal) {
+    if (!modal) return false;
+    // Bỏ qua widget của tool
+    if (modal.closest('#dcvh-modal') || modal.closest('#dcvh-auto-btn')) return false;
+    // Bỏ qua Sổ tay dân cư, Sân ga, Kho hàng, Chợ, Menu chính
+    if (
+      modal.closest('#journal-root') ||
+      modal.closest('#books-root') ||
+      modal.id?.includes('journal') ||
+      modal.id?.includes('book') ||
+      modal.className?.includes('journal')
+    ) {
+      return false;
+    }
+
+    // 1. Kiểm tra class hoặc id đặc trưng của Sự Kiện
+    const classOrId = ((modal.className || '') + ' ' + (modal.id || '')).toLowerCase();
+    if (
+      classOrId.includes('event-modal') ||
+      classOrId.includes('event-dialog') ||
+      classOrId.includes('event-popup') ||
+      classOrId.includes('dailyevent') ||
+      classOrId.includes('news-modal')
+    ) {
+      return true;
+    }
+
+    // 2. Kiểm tra tiêu đề modal có chứa từ khóa Sự Kiện hay không
+    const titleEl = modal.querySelector('h1, h2, h3, h4, [class*="title"], [class*="header"]');
+    if (titleEl) {
+      const titleText = (titleEl.textContent || '').trim().toLowerCase();
+      // Nếu là tiêu đề menu bình thường thì bỏ qua
+      if (
+        titleText.includes('sổ tay') ||
+        titleText.includes('dân cư') ||
+        titleText.includes('chợ') ||
+        titleText.includes('cửa hàng') ||
+        titleText.includes('nhân viên') ||
+        titleText.includes('cài đặt') ||
+        titleText.includes('mặt bằng')
+      ) {
+        return false;
+      }
+
+      if (
+        titleText.includes('sự kiện') ||
+        titleText.includes('tin tức') ||
+        titleText.includes('biến cố') ||
+        titleText.includes('bất ngờ') ||
+        titleText.includes('cơ hội') ||
+        titleText.includes('thời tiết') ||
+        titleText.includes('đô thị') ||
+        titleText.includes('tổng kết ngày') ||
+        titleText.includes('chúc mừng')
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   function processAutoEvents() {
     if (!userConfig.autoClickEvents) return;
     const now = Date.now();
-    if (now - lastEventClickTime < 700) return; // Debounce 700ms
+    if (now - lastEventClickTime < 900) return; // Debounce 900ms an toàn
 
-    // 1. Quét Dialog / Modal Sự Kiện & Thông Báo Nổi
-    const modals = document.querySelectorAll('div[class*="modal"], div[class*="dialog"], div[role="dialog"], div[class*="popup"], div[class*="event"], div[class*="card"]');
+    // 1. Quét Dialog / Modal Sự Kiện THỰC SỰ (Chỉ quét modal thực sự, KHÔNG quét thẻ bài hay card)
+    const modals = document.querySelectorAll('div[class*="modal"], div[class*="dialog"], div[role="dialog"], div[class*="popup"]');
     for (const modal of modals) {
-      if (modal.closest('#dcvh-modal') || modal.closest('#dcvh-auto-btn')) continue;
       if (modal.offsetParent === null && window.getComputedStyle(modal).display === 'none') continue;
+      if (!isRealEventModal(modal)) continue;
 
       const buttons = modal.querySelectorAll('button, [role="button"], .btn');
       for (const btn of buttons) {
         if (btn.offsetParent === null || btn.disabled) continue;
         const text = (btn.textContent || '').trim().toLowerCase();
-        if (text.includes('xóa') || text.includes('reset') || text.includes('hủy') || text.includes('thoát')) continue;
 
+        // Danh sách đen: Tuyệt đối không bấm các nút này
         if (
-          text.includes('nhận') ||
-          text.includes('tiếp tục') ||
-          text.includes('xác nhận') ||
-          text.includes('đồng ý') ||
-          text.includes('xong') ||
-          text.includes('ok') ||
-          text.includes('đóng') ||
-          text.includes('thu hoạch') ||
-          text.includes('lấy quà') ||
-          text.includes('chấp nhận') ||
-          text.includes('thu tiền')
+          text.includes('xóa') ||
+          text.includes('reset') ||
+          text.includes('hủy') ||
+          text.includes('thoát') ||
+          text.includes('nhân viên') ||
+          text.includes('chọn món') ||
+          text.includes('mua hàng') ||
+          text.includes('mời nước') ||
+          text.includes('mời ghé') ||
+          text.includes('hỏi nhà')
         ) {
+          continue;
+        }
+
+        // Danh sách trắng các nút sự kiện hợp lệ
+        const validActionKeywords = [
+          'tiếp tục',
+          'xác nhận',
+          'đồng ý',
+          'nhận thưởng',
+          'nhận quà',
+          'thu hoạch',
+          'bỏ qua',
+          'chấp nhận',
+          'xong',
+          'đóng'
+        ];
+
+        const isExactOrValidAction = validActionKeywords.some(kw => text === kw || text.startsWith(kw) || text.endsWith(kw));
+        if (isExactOrValidAction) {
           btn.click();
           lastEventClickTime = now;
-          appendLog(`🎯 [Auto Event] Đã bấm: "${btn.textContent.trim()}"`);
+          appendLog(`🎯 [Auto Event] Đã bấm nút sự kiện: "${btn.textContent.trim()}"`);
           return;
         }
       }
 
-      // Tự động chọn phương án đầu tiên trong hộp thoại sự kiện nếu có
-      if (userConfig.autoClickChoices && buttons.length > 0) {
-        for (const btn of buttons) {
-          if (btn.offsetParent === null || btn.disabled) continue;
-          btn.click();
-          lastEventClickTime = now;
-          appendLog(`🎯 [Auto Event] Đã chọn phương án: "${btn.textContent.trim()}"`);
-          return;
+      // Nếu trong modal sự kiện có các nút lựa chọn phương án (.event-choices, .choices)
+      if (userConfig.autoClickChoices) {
+        const choiceContainer = modal.querySelector('[class*="choice"], [class*="option"], [class*="answer"]');
+        if (choiceContainer) {
+          const choiceBtn = choiceContainer.querySelector('button, [role="button"]');
+          if (choiceBtn && !choiceBtn.disabled && choiceBtn.offsetParent !== null) {
+            choiceBtn.click();
+            lastEventClickTime = now;
+            appendLog(`🎯 [Auto Event] Đã chọn phương án: "${choiceBtn.textContent.trim()}"`);
+            return;
+          }
         }
       }
     }
 
-    // 2. Quét Bong Bóng Nổi / Floating Bubbles / Biểu tượng sự kiện trên màn hình
+    // 2. Quét Bong Bóng Nổi / Floating Event Bubble CHÍNH XÁC trên bản đồ
     if (userConfig.autoClickBubbles) {
+      // Chỉ tìm các phần tử nổi tự do trên bản đồ, loại trừ thanh công cụ / navbar / status bar
       const bubbleSelectors = [
-        '[class*="bubble"]',
-        '[class*="floating"]',
-        '[class*="event-icon"]',
-        '[class*="event-badge"]',
-        '[data-event]',
-        '[class*="speech-bubble"]'
+        '[class*="event-bubble"]',
+        '[class*="bubble-event"]',
+        '[data-event="bubble"]',
+        '[class*="floating-gift"]',
+        '[class*="map-event"]'
       ];
       const elements = document.querySelectorAll(bubbleSelectors.join(','));
       for (const el of elements) {
         if (el.closest('#dcvh-modal') || el.closest('#dcvh-auto-btn')) continue;
+        if (el.closest('header') || el.closest('nav') || el.closest('#journal-root')) continue;
         if (el.offsetParent === null) continue;
 
         el.click();
         lastEventClickTime = now;
-        appendLog(`🎈 [Auto Event] Đã click bong bóng/sự kiện nổi trên màn hình!`);
+        appendLog(`🎈 [Auto Event] Đã click bong bóng sự kiện trên bản đồ!`);
         return;
       }
 
-      // Quét các nút hoặc icon có biểu tượng sự kiện 🎁, ❗, ❓, 💬, 💰
-      const clickables = document.querySelectorAll('button, div[role="button"], span[role="button"]');
-      for (const el of clickables) {
-        if (el.closest('#dcvh-modal') || el.closest('#dcvh-auto-btn')) continue;
+      // Chỉ click biểu tượng quà 🎁 hoặc chấm than ❗ nếu nó là phần tử nổi tuyệt đối trên màn hình
+      const floatingIcons = document.querySelectorAll('div[class*="bubble"], div[class*="floating"], div[class*="icon"]');
+      for (const el of floatingIcons) {
+        if (el.closest('#dcvh-modal') || el.closest('#dcvh-auto-btn') || el.closest('nav') || el.closest('header')) continue;
         if (el.offsetParent === null) continue;
+
+        const pos = window.getComputedStyle(el).position;
+        if (pos !== 'absolute' && pos !== 'fixed') continue;
+
         const text = (el.textContent || '').trim();
-        if (text.includes('🎁') || text.includes('❗') || text.includes('💬') || text.includes('💰')) {
+        // Chỉ click nếu đúng là hộp quà bay hoặc chấm than nổi
+        if (text === '🎁' || text === '❗' || text.startsWith('🎁')) {
           el.click();
           lastEventClickTime = now;
-          appendLog(`🎁 [Auto Event] Đã bấm icon sự kiện: "${text.substring(0, 20)}"`);
+          appendLog(`🎁 [Auto Event] Đã nhặt quà sự kiện nổi: "${text}"`);
           return;
         }
       }
