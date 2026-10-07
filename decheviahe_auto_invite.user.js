@@ -17,7 +17,7 @@
   // ==========================================
   // CONFIG & STATE MANAGEMENT
   // ==========================================
-  const STORAGE_KEY_CONFIG = 'dcvh_tool_config_v3';
+  const STORAGE_KEY_CONFIG = 'dcvh_tool_config_v3_2';
   const SAVE_STORAGE_KEY = 'de-che-via-he/save/v3';
 
   const defaultConfig = {
@@ -28,7 +28,7 @@
     autoLeads: true,       // Chăm sóc người dẫn mối
     skipMaxTier: true,     // Bỏ qua người đã đạt max tier / đủ sao
     maxTreatCount: 0,      // Giới hạn số người mời nước (0 = không giới hạn)
-    autoClickEvents: false,// Tự động click sự kiện & bong bóng trên màn hình (mặc định tắt, người dùng bật khi cần)
+    autoClickEvents: true, // Tự động click sự kiện & bong bóng trên màn hình (Mặc định BẬT)
     autoClickChoices: true,// Tự động chọn phương án trong hộp thoại sự kiện
     eventChoiceStrategy: 'smart', // 'smart' | 'safe' | 'first' | 'manual'
     autoClickBubbles: true,// Tự động click bong bóng/quà nổi trên màn hình
@@ -40,8 +40,17 @@
 
   let userConfig = { ...defaultConfig };
   try {
-    const saved = localStorage.getItem(STORAGE_KEY_CONFIG);
-    if (saved) userConfig = { ...defaultConfig, ...JSON.parse(saved) };
+    let saved = localStorage.getItem(STORAGE_KEY_CONFIG);
+    if (!saved) {
+      saved = localStorage.getItem('dcvh_tool_config_v3');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        parsed.autoClickEvents = true; // Kích hoạt autoClickEvents khi nâng cấp
+        userConfig = { ...defaultConfig, ...parsed };
+      }
+    } else {
+      userConfig = { ...defaultConfig, ...JSON.parse(saved) };
+    }
   } catch (e) {}
 
   function saveUserConfig() {
@@ -988,6 +997,23 @@
   // ==========================================
   let lastEventClickTime = 0;
 
+  function parseCostFromText(text) {
+    const match = text.match(/(?:đưa|chi|phạt|mất|tốn|vay|mượn)\s*([\d.,]+)\s*k?/i);
+    if (!match) return 0;
+
+    let rawNum = match[1];
+    // Xử lý phân cách hàng nghìn tiếng Việt/Việt Nam (vd: 2.000 hoặc 2,000)
+    if (/^\d{1,3}[.,]\d{3}$/.test(rawNum)) {
+      rawNum = rawNum.replace(/[.,]/, '');
+    } else {
+      // Trường hợp số thập phân như 2.5k
+      rawNum = rawNum.replace(',', '.');
+    }
+
+    const num = parseFloat(rawNum);
+    return isNaN(num) ? 0 : num;
+  }
+
   function scoreEventOption(optionText, index, currentCash, minCashReserve, strategy = 'smart') {
     if (strategy === 'first') return index === 0 ? 9999 : 0;
 
@@ -995,12 +1021,7 @@
     const allText = (optionText || '').toLowerCase();
 
     // 1. Kiểm tra chi phí tiền mặt & an toàn vốn
-    const costMatch = allText.match(/(?:đưa|chi|phạt|mất|tốn)\s*(\d+(?:[.,]\d+)?)\s*k?/i);
-    let cost = 0;
-    if (costMatch) {
-      cost = parseFloat(costMatch[1].replace(',', '.'));
-    }
-
+    const cost = parseCostFromText(allText);
     const remainingCash = currentCash - cost;
     const isAffordable = remainingCash >= minCashReserve;
 
@@ -1016,8 +1037,11 @@
     }
 
     // Chiến lược 'smart'
-    // A. Thân thiết / Quan hệ (Ưu tiên số 1)
-    if (allText.includes('thân +') || allText.includes('kết thân') || allText.includes('thân thiết') || allText.includes('tình cảm +')) score += 50;
+    // A. Thân thiết / Quan hệ (Ưu tiên số 1, phân cấp bậc theo số lượng dấu +)
+    if (allText.includes('thân +++')) score += 110;
+    else if (allText.includes('thân ++')) score += 80;
+    else if (allText.includes('thân +') || allText.includes('kết thân') || allText.includes('thân thiết') || allText.includes('tình cảm +')) score += 50;
+
     if (allText.includes('mất lòng') || allText.includes('khách quen xa') || allText.includes('thân -') || allText.includes('giảm thân')) score -= 40;
 
     // B. Uy tín / Danh tiếng
@@ -1100,6 +1124,8 @@
       titleText.includes('ghi sổ') ||
       titleText.includes('bán chịu') ||
       titleText.includes('nợ') ||
+      titleText.includes('mượn') ||
+      titleText.includes('vay') ||
       titleText.includes('kiểm tra') ||
       titleText.includes('thanh tra') ||
       titleText.includes('khách quen')
@@ -1119,40 +1145,59 @@
     return false;
   }
 
-  function evaluateAndChooseEventOption(modal, sim) {
-    if (!userConfig.autoClickChoices) return false;
-    if (userConfig.eventChoiceStrategy === 'manual') return false; // Người chơi muốn tự bấm tay
+  // Kích hoạt click mô phỏng đầy đủ (Pointer + Mouse + Click) tương thích 100% React
+  function safeClick(el) {
+    if (!el) return;
+    try {
+      const opts = { bubbles: true, cancelable: true, view: window };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new MouseEvent('mousedown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+      el.dispatchEvent(new MouseEvent('mouseup', opts));
+      el.click();
+    } catch (e) {
+      try { el.click(); } catch (err) {}
+    }
+  }
 
-    // 1. Tìm tất cả các nút có chữ "Chọn" trong modal
-    const candidateBtns = Array.from(modal.querySelectorAll('button, [role="button"], .btn')).filter(btn => {
+  // 1. Xử lý các sự kiện đa lựa chọn (Ghi sổ, Mượn tiền, Tình huống bất ngờ có nút "Chọn")
+  function handleMultiChoiceEvents(sim) {
+    if (!userConfig.autoClickChoices) return false;
+    if (userConfig.eventChoiceStrategy === 'manual') return false; // Người chơi muốn tự chọn tay
+
+    // Quét trực tiếp TẤT CẢ các nút có chữ "Chọn" trên màn hình (không phụ thuộc vào class tên modal)
+    const allBtns = Array.from(document.querySelectorAll('button, [role="button"], .btn, div[class*="button"], span[class*="button"]'));
+    const candidateBtns = allBtns.filter(btn => {
       if (btn.offsetParent === null || btn.disabled) return false;
+      // Bỏ qua widget của tool, sổ tay, và sân ga
+      if (btn.closest('#dcvh-modal') || btn.closest('#dcvh-auto-btn') || btn.closest('#journal-root') || btn.closest('#books-root')) {
+        return false;
+      }
       const t = (btn.textContent || '').trim().toLowerCase();
       return t === 'chọn' || t.startsWith('chọn');
     });
 
-    if (candidateBtns.length === 0) return false;
+    if (candidateBtns.length < 2) return false;
 
-    // 2. Tìm container (card) đại diện cho từng lựa chọn
     const options = [];
     const currentCash = getPlayerCoins(sim);
     const minReserve = userConfig.minCashReserve || 0;
     const strategy = userConfig.eventChoiceStrategy || 'smart';
 
     candidateBtns.forEach((btn, idx) => {
-      // Leo ngược DOM để tìm card bao bọc duy nhất nút này
+      // Leo ngược DOM để tìm thẻ card bao bọc riêng nút này
       let card = btn.parentElement;
-      while (card && card !== modal && card.querySelectorAll('button, [role="button"], .btn').length === 1) {
-        if (card.parentElement && card.parentElement.querySelectorAll('button, [role="button"], .btn').length > 1) {
+      while (card && card !== document.body && card.querySelectorAll('button, [role="button"], .btn, div[class*="button"]').length === 1) {
+        if (card.parentElement && card.parentElement.querySelectorAll('button, [role="button"], .btn, div[class*="button"]').length > 1) {
           break;
         }
         card = card.parentElement;
       }
-      if (!card || card === modal) card = btn.parentElement || btn;
+      if (!card || card === document.body) card = btn.parentElement || btn;
 
       const cardText = (card.textContent || '').trim();
       const score = scoreEventOption(cardText, idx, currentCash, minReserve, strategy);
 
-      // Trích xuất tiêu đề ngắn gọn của phương án để ghi log
       const titleCandidate = card.querySelector('h1, h2, h3, h4, b, strong, [class*="title"], [class*="name"]');
       let optTitle = titleCandidate ? titleCandidate.textContent.trim() : cardText.split('\n')[0].trim();
       if (optTitle.length > 30) optTitle = optTitle.slice(0, 30) + '...';
@@ -1168,139 +1213,131 @@
 
     if (options.length === 0) return false;
 
-    // 3. Sắp xếp tìm phương án có điểm cao nhất (ưu tiên index nhỏ hơn nếu bằng điểm)
+    // Sắp xếp chọn phương án có điểm cao nhất
     options.sort((a, b) => b.score - a.score || a.index - b.index);
     const best = options[0];
 
-    const modalTitleEl = modal.querySelector('h1, h2, h3, h4, [class*="title"], [class*="header"]');
-    const modalTitle = modalTitleEl ? modalTitleEl.textContent.trim() : 'Sự kiện';
+    // Tìm tiêu đề sự kiện từ vùng chứa
+    let eventTitle = 'Sự kiện';
+    try {
+      const parentContainer = candidateBtns[0].closest('[role="dialog"], div[class*="modal"], div[class*="dialog"], div[class*="popup"], div[class*="fixed"], div[class*="relative"]') || candidateBtns[0].parentElement?.parentElement;
+      const titleEl = parentContainer ? parentContainer.querySelector('h1, h2, h3, h4, [class*="title"], [class*="header"]') : null;
+      if (titleEl) eventTitle = titleEl.textContent.trim();
+    } catch (e) {}
 
-    best.btn.click();
+    safeClick(best.btn);
     lastEventClickTime = Date.now();
-    appendLog(`🎯 [Smart Event] "${modalTitle}": Đã chọn "${best.title}" (Điểm: ${best.score > 0 ? '+' : ''}${best.score} | Chiến lược: ${strategy}).`);
+    appendLog(`🎯 [Smart Event] "${eventTitle}": Đã chọn "${best.title}" (Điểm: ${best.score > 0 ? '+' : ''}${best.score} | Chiến lược: ${strategy}).`);
     return true;
+  }
+
+  // 2. Xử lý các sự kiện đơn / Hộp thoại thông báo (Tiếp tục, Nhận thưởng, Đóng...)
+  function handleSingleActionEvents() {
+    const allBtns = Array.from(document.querySelectorAll('button, [role="button"], .btn'));
+    const validActionKeywords = [
+      'tiếp tục',
+      'xác nhận',
+      'đồng ý',
+      'nhận thưởng',
+      'nhận quà',
+      'thu hoạch',
+      'bỏ qua',
+      'chấp nhận',
+      'xong',
+      'đóng'
+    ];
+
+    for (const btn of allBtns) {
+      if (btn.offsetParent === null || btn.disabled) continue;
+      if (btn.closest('#dcvh-modal') || btn.closest('#dcvh-auto-btn') || btn.closest('#journal-root') || btn.closest('#books-root')) continue;
+
+      const text = (btn.textContent || '').trim().toLowerCase();
+      // Danh sách đen: Tuyệt đối không bấm các nút này
+      if (
+        text.includes('xóa') ||
+        text.includes('reset') ||
+        text.includes('hủy') ||
+        text.includes('thoát') ||
+        text.includes('nhân viên') ||
+        text.includes('chọn món') ||
+        text.includes('mua hàng') ||
+        text.includes('mời nước') ||
+        text.includes('mời ghé') ||
+        text.includes('hỏi nhà')
+      ) {
+        continue;
+      }
+
+      const isExactOrValidAction = validActionKeywords.some(kw => text === kw || text.startsWith(kw) || text.endsWith(kw));
+      if (isExactOrValidAction) {
+        safeClick(btn);
+        lastEventClickTime = Date.now();
+        appendLog(`🎯 [Auto Event] Đã bấm nút sự kiện: "${btn.textContent.trim()}"`);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // 3. Xử lý bong bóng sự kiện / Quà bay trên màn hình
+  function handleFloatingBubbles() {
+    if (!userConfig.autoClickBubbles) return false;
+
+    const bubbleSelectors = [
+      '[class*="event-bubble"]',
+      '[class*="bubble-event"]',
+      '[data-event="bubble"]',
+      '[class*="floating-gift"]',
+      '[class*="map-event"]'
+    ];
+    const elements = document.querySelectorAll(bubbleSelectors.join(','));
+    for (const el of elements) {
+      if (el.closest('#dcvh-modal') || el.closest('#dcvh-auto-btn') || el.closest('header') || el.closest('nav') || el.closest('#journal-root')) continue;
+      if (el.offsetParent === null) continue;
+
+      safeClick(el);
+      lastEventClickTime = Date.now();
+      appendLog(`🎈 [Auto Event] Đã click bong bóng sự kiện trên bản đồ!`);
+      return true;
+    }
+
+    const floatingIcons = document.querySelectorAll('div[class*="bubble"], div[class*="floating"], div[class*="icon"], span[class*="icon"]');
+    for (const el of floatingIcons) {
+      if (el.closest('#dcvh-modal') || el.closest('#dcvh-auto-btn') || el.closest('nav') || el.closest('header')) continue;
+      if (el.offsetParent === null) continue;
+
+      const pos = window.getComputedStyle(el).position;
+      if (pos !== 'absolute' && pos !== 'fixed') continue;
+
+      const text = (el.textContent || '').trim();
+      if (text === '🎁' || text === '❗' || text.startsWith('🎁')) {
+        safeClick(el);
+        lastEventClickTime = Date.now();
+        appendLog(`🎁 [Auto Event] Đã nhặt quà sự kiện nổi: "${text}"`);
+        return true;
+      }
+    }
+    return false;
   }
 
   function processAutoEvents() {
     if (!userConfig.autoClickEvents) return;
     const now = Date.now();
-    if (now - lastEventClickTime < 900) return; // Debounce 900ms an toàn
+    if (now - lastEventClickTime < 700) return; // Debounce 700ms an toàn
 
-    const sim = extractSimFromDom();
+    try {
+      const sim = extractSimFromDom();
 
-    // 1. Quét Dialog / Modal Sự Kiện THỰC SỰ
-    const modals = document.querySelectorAll('div[class*="modal"], div[class*="dialog"], div[role="dialog"], div[class*="popup"]');
-    for (const modal of modals) {
-      if (modal.offsetParent === null && window.getComputedStyle(modal).display === 'none') continue;
-      if (!isRealEventModal(modal)) continue;
+      // 1. Ưu tiên hàng đầu: Các sự kiện đa phương án lựa chọn (Ghi sổ, Mượn tiền, Tình huống...)
+      if (handleMultiChoiceEvents(sim)) return;
 
-      // Ưu tiên 1: Nếu là modal có nhiều lựa chọn với nút "Chọn", dùng Smart Event Engine
-      if (userConfig.autoClickChoices) {
-        const handledBySmartEngine = evaluateAndChooseEventOption(modal, sim);
-        if (handledBySmartEngine) return;
-      }
+      // 2. Các hộp thoại thông báo / 1 nút hành động (Tiếp tục, Nhận quà...)
+      if (handleSingleActionEvents()) return;
 
-      // Ưu tiên 2: Modal thông báo / 1 nút hành động (Tiếp tục, Nhận thưởng, Đóng...)
-      const buttons = modal.querySelectorAll('button, [role="button"], .btn');
-      for (const btn of buttons) {
-        if (btn.offsetParent === null || btn.disabled) continue;
-        const text = (btn.textContent || '').trim().toLowerCase();
-
-        // Danh sách đen: Tuyệt đối không bấm các nút này
-        if (
-          text.includes('xóa') ||
-          text.includes('reset') ||
-          text.includes('hủy') ||
-          text.includes('thoát') ||
-          text.includes('nhân viên') ||
-          text.includes('chọn món') ||
-          text.includes('mua hàng') ||
-          text.includes('mời nước') ||
-          text.includes('mời ghé') ||
-          text.includes('hỏi nhà')
-        ) {
-          continue;
-        }
-
-        // Danh sách trắng các nút sự kiện hợp lệ
-        const validActionKeywords = [
-          'tiếp tục',
-          'xác nhận',
-          'đồng ý',
-          'nhận thưởng',
-          'nhận quà',
-          'thu hoạch',
-          'bỏ qua',
-          'chấp nhận',
-          'xong',
-          'đóng',
-          'chọn'
-        ];
-
-        const isExactOrValidAction = validActionKeywords.some(kw => text === kw || text.startsWith(kw) || text.endsWith(kw));
-        if (isExactOrValidAction) {
-          btn.click();
-          lastEventClickTime = now;
-          appendLog(`🎯 [Auto Event] Đã bấm nút sự kiện: "${btn.textContent.trim()}"`);
-          return;
-        }
-      }
-
-      // Ưu tiên 3: Container choices dạng cũ (nếu có .choices button)
-      if (userConfig.autoClickChoices && userConfig.eventChoiceStrategy !== 'manual') {
-        const choiceContainer = modal.querySelector('[class*="choice"], [class*="option"], [class*="answer"]');
-        if (choiceContainer) {
-          const choiceBtn = choiceContainer.querySelector('button, [role="button"]');
-          if (choiceBtn && !choiceBtn.disabled && choiceBtn.offsetParent !== null) {
-            choiceBtn.click();
-            lastEventClickTime = now;
-            appendLog(`🎯 [Auto Event] Đã chọn phương án: "${choiceBtn.textContent.trim()}"`);
-            return;
-          }
-        }
-      }
-    }
-
-    // 2. Quét Bong Bóng Nổi / Floating Event Bubble CHÍNH XÁC trên bản đồ
-    if (userConfig.autoClickBubbles) {
-      // Chỉ tìm các phần tử nổi tự do trên bản đồ, loại trừ thanh công cụ / navbar / status bar
-      const bubbleSelectors = [
-        '[class*="event-bubble"]',
-        '[class*="bubble-event"]',
-        '[data-event="bubble"]',
-        '[class*="floating-gift"]',
-        '[class*="map-event"]'
-      ];
-      const elements = document.querySelectorAll(bubbleSelectors.join(','));
-      for (const el of elements) {
-        if (el.closest('#dcvh-modal') || el.closest('#dcvh-auto-btn')) continue;
-        if (el.closest('header') || el.closest('nav') || el.closest('#journal-root')) continue;
-        if (el.offsetParent === null) continue;
-
-        el.click();
-        lastEventClickTime = now;
-        appendLog(`🎈 [Auto Event] Đã click bong bóng sự kiện trên bản đồ!`);
-        return;
-      }
-
-      // Chỉ click biểu tượng quà 🎁 hoặc chấm than ❗ nếu nó là phần tử nổi tuyệt đối trên màn hình
-      const floatingIcons = document.querySelectorAll('div[class*="bubble"], div[class*="floating"], div[class*="icon"]');
-      for (const el of floatingIcons) {
-        if (el.closest('#dcvh-modal') || el.closest('#dcvh-auto-btn') || el.closest('nav') || el.closest('header')) continue;
-        if (el.offsetParent === null) continue;
-
-        const pos = window.getComputedStyle(el).position;
-        if (pos !== 'absolute' && pos !== 'fixed') continue;
-
-        const text = (el.textContent || '').trim();
-        // Chỉ click nếu đúng là hộp quà bay hoặc chấm than nổi
-        if (text === '🎁' || text === '❗' || text.startsWith('🎁')) {
-          el.click();
-          lastEventClickTime = now;
-          appendLog(`🎁 [Auto Event] Đã nhặt quà sự kiện nổi: "${text}"`);
-          return;
-        }
-      }
+      // 3. Bong bóng sự kiện / Quà bay trên bản đồ
+      if (handleFloatingBubbles()) return;
+    } catch (err) {
+      console.warn('[DCVH Auto Event Error]:', err);
     }
   }
 
@@ -1613,6 +1650,9 @@
     appendLog(isScopeAll ? '🔍 Đang quét toàn bộ cư dân trong xóm...' : '🔍 Đang quét nhân vật cần thiết cho Mặt Bằng...');
     if (doTreat && maxTreat > 0) {
       appendLog(`🎯 Mục tiêu mời nước: Tối đa ${maxTreat} người.`);
+    }
+    if (userConfig.autoClickEvents) {
+      appendLog(`🎯 [Auto Event] Đang chạy nền để tự động xử lý sự kiện/ghi sổ (Chiến lược: ${userConfig.eventChoiceStrategy}).`);
     }
 
     let targets = [];
