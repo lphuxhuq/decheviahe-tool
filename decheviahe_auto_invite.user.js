@@ -984,9 +984,58 @@
   }
 
   // ==========================================
-  // AUTO EVENT & BUBBLE CATCHER (CHÍNH XÁC 100% - CHỐNG CLICK NHẦM)
+  // SMART EVENT ENGINE (CHẤM ĐIỂM & CHỌN PHƯƠNG ÁN TỐI ƯU)
   // ==========================================
   let lastEventClickTime = 0;
+
+  function scoreEventOption(optionText, index, currentCash, minCashReserve, strategy = 'smart') {
+    if (strategy === 'first') return index === 0 ? 9999 : 0;
+
+    let score = 0;
+    const allText = (optionText || '').toLowerCase();
+
+    // 1. Kiểm tra chi phí tiền mặt & an toàn vốn
+    const costMatch = allText.match(/(?:đưa|chi|phạt|mất|tốn)\s*(\d+(?:[.,]\d+)?)\s*k?/i);
+    let cost = 0;
+    if (costMatch) {
+      cost = parseFloat(costMatch[1].replace(',', '.'));
+    }
+
+    const remainingCash = currentCash - cost;
+    const isAffordable = remainingCash >= minCashReserve;
+
+    if (cost > 0 && !isAffordable) {
+      score -= 500; // Phạt nặng nếu làm hụt vốn an toàn
+    }
+
+    if (strategy === 'safe') {
+      if (cost > 0) score -= 200;
+      if (allText.includes('có khi mất') || allText.includes('nguy cơ') || allText.includes('rủi ro')) score -= 100;
+      if (allText.includes('không') || allText.includes('từ chối')) score += 50;
+      return score;
+    }
+
+    // Chiến lược 'smart'
+    // A. Thân thiết / Quan hệ (Ưu tiên số 1)
+    if (allText.includes('thân +') || allText.includes('kết thân') || allText.includes('thân thiết') || allText.includes('tình cảm +')) score += 50;
+    if (allText.includes('mất lòng') || allText.includes('khách quen xa') || allText.includes('thân -') || allText.includes('giảm thân')) score -= 40;
+
+    // B. Uy tín / Danh tiếng
+    if (allText.includes('danh tiếng +') || allText.includes('uy tín +') || allText.includes('tiếng thơm +')) score += 40;
+    if (allText.includes('danh tiếng -') || allText.includes('mất uy tín') || allText.includes('bị chê')) score -= 35;
+
+    // C. Thu nhập / Khách
+    if (allText.includes('tăng khách') || allText.includes('khách +') || allText.includes('lời') || allText.includes('nhận')) score += 30;
+
+    // D. Rủi ro mất trắng (nếu còn vốn thì chỉ trừ nhẹ để chấp nhận mạo hiểm tăng thân thiết)
+    if (allText.includes('có khi mất') || allText.includes('rủi ro') || allText.includes('nguy cơ')) score -= 15;
+
+    // E. Tag biểu tượng +/-
+    if (allText.includes('+')) score += 20;
+    if (allText.includes('-')) score -= 20;
+
+    return score;
+  }
 
   function isRealEventModal(modal) {
     if (!modal) return false;
@@ -998,7 +1047,29 @@
       modal.closest('#books-root') ||
       modal.id?.includes('journal') ||
       modal.id?.includes('book') ||
-      modal.className?.includes('journal')
+      modal.className?.includes('journal') ||
+      modal.id?.includes('store') ||
+      modal.id?.includes('shop') ||
+      modal.id?.includes('market') ||
+      modal.className?.includes('shop')
+    ) {
+      return false;
+    }
+
+    // Tiêu đề
+    const titleEl = modal.querySelector('h1, h2, h3, h4, [class*="title"], [class*="header"]');
+    const titleText = (titleEl ? titleEl.textContent || '' : '').trim().toLowerCase();
+
+    // Nếu là tiêu đề menu quản lý bình thường thì bỏ qua
+    if (
+      titleText.includes('sổ tay') ||
+      titleText.includes('dân cư') ||
+      titleText.includes('chợ') ||
+      titleText.includes('cửa hàng') ||
+      titleText.includes('nhân viên') ||
+      titleText.includes('cài đặt') ||
+      titleText.includes('mặt bằng') ||
+      titleText.includes('quản lý quán')
     ) {
       return false;
     }
@@ -1015,39 +1086,99 @@
       return true;
     }
 
-    // 2. Kiểm tra tiêu đề modal có chứa từ khóa Sự Kiện hay không
-    const titleEl = modal.querySelector('h1, h2, h3, h4, [class*="title"], [class*="header"]');
-    if (titleEl) {
-      const titleText = (titleEl.textContent || '').trim().toLowerCase();
-      // Nếu là tiêu đề menu bình thường thì bỏ qua
-      if (
-        titleText.includes('sổ tay') ||
-        titleText.includes('dân cư') ||
-        titleText.includes('chợ') ||
-        titleText.includes('cửa hàng') ||
-        titleText.includes('nhân viên') ||
-        titleText.includes('cài đặt') ||
-        titleText.includes('mặt bằng')
-      ) {
-        return false;
-      }
+    // 2. Kiểm tra tiêu đề modal có chứa từ khóa Sự Kiện / Tình huống hay không
+    if (
+      titleText.includes('sự kiện') ||
+      titleText.includes('tin tức') ||
+      titleText.includes('biến cố') ||
+      titleText.includes('bất ngờ') ||
+      titleText.includes('cơ hội') ||
+      titleText.includes('thời tiết') ||
+      titleText.includes('đô thị') ||
+      titleText.includes('tổng kết ngày') ||
+      titleText.includes('chúc mừng') ||
+      titleText.includes('ghi sổ') ||
+      titleText.includes('bán chịu') ||
+      titleText.includes('nợ') ||
+      titleText.includes('kiểm tra') ||
+      titleText.includes('thanh tra') ||
+      titleText.includes('khách quen')
+    ) {
+      return true;
+    }
 
-      if (
-        titleText.includes('sự kiện') ||
-        titleText.includes('tin tức') ||
-        titleText.includes('biến cố') ||
-        titleText.includes('bất ngờ') ||
-        titleText.includes('cơ hội') ||
-        titleText.includes('thời tiết') ||
-        titleText.includes('đô thị') ||
-        titleText.includes('tổng kết ngày') ||
-        titleText.includes('chúc mừng')
-      ) {
-        return true;
-      }
+    // 3. Kiểm tra nếu modal chứa từ 2 nút "Chọn" trở lên (dấu hiệu đặc trưng của sự kiện đa lựa chọn)
+    const chonBtns = Array.from(modal.querySelectorAll('button, [role="button"], .btn')).filter(btn => {
+      const t = (btn.textContent || '').trim().toLowerCase();
+      return t === 'chọn' || t.startsWith('chọn');
+    });
+    if (chonBtns.length >= 2) {
+      return true;
     }
 
     return false;
+  }
+
+  function evaluateAndChooseEventOption(modal, sim) {
+    if (!userConfig.autoClickChoices) return false;
+    if (userConfig.eventChoiceStrategy === 'manual') return false; // Người chơi muốn tự bấm tay
+
+    // 1. Tìm tất cả các nút có chữ "Chọn" trong modal
+    const candidateBtns = Array.from(modal.querySelectorAll('button, [role="button"], .btn')).filter(btn => {
+      if (btn.offsetParent === null || btn.disabled) return false;
+      const t = (btn.textContent || '').trim().toLowerCase();
+      return t === 'chọn' || t.startsWith('chọn');
+    });
+
+    if (candidateBtns.length === 0) return false;
+
+    // 2. Tìm container (card) đại diện cho từng lựa chọn
+    const options = [];
+    const currentCash = getPlayerCoins(sim);
+    const minReserve = userConfig.minCashReserve || 0;
+    const strategy = userConfig.eventChoiceStrategy || 'smart';
+
+    candidateBtns.forEach((btn, idx) => {
+      // Leo ngược DOM để tìm card bao bọc duy nhất nút này
+      let card = btn.parentElement;
+      while (card && card !== modal && card.querySelectorAll('button, [role="button"], .btn').length === 1) {
+        if (card.parentElement && card.parentElement.querySelectorAll('button, [role="button"], .btn').length > 1) {
+          break;
+        }
+        card = card.parentElement;
+      }
+      if (!card || card === modal) card = btn.parentElement || btn;
+
+      const cardText = (card.textContent || '').trim();
+      const score = scoreEventOption(cardText, idx, currentCash, minReserve, strategy);
+
+      // Trích xuất tiêu đề ngắn gọn của phương án để ghi log
+      const titleCandidate = card.querySelector('h1, h2, h3, h4, b, strong, [class*="title"], [class*="name"]');
+      let optTitle = titleCandidate ? titleCandidate.textContent.trim() : cardText.split('\n')[0].trim();
+      if (optTitle.length > 30) optTitle = optTitle.slice(0, 30) + '...';
+
+      options.push({
+        btn,
+        card,
+        index: idx,
+        title: optTitle || `Phương án ${idx + 1}`,
+        score
+      });
+    });
+
+    if (options.length === 0) return false;
+
+    // 3. Sắp xếp tìm phương án có điểm cao nhất (ưu tiên index nhỏ hơn nếu bằng điểm)
+    options.sort((a, b) => b.score - a.score || a.index - b.index);
+    const best = options[0];
+
+    const modalTitleEl = modal.querySelector('h1, h2, h3, h4, [class*="title"], [class*="header"]');
+    const modalTitle = modalTitleEl ? modalTitleEl.textContent.trim() : 'Sự kiện';
+
+    best.btn.click();
+    lastEventClickTime = Date.now();
+    appendLog(`🎯 [Smart Event] "${modalTitle}": Đã chọn "${best.title}" (Điểm: ${best.score > 0 ? '+' : ''}${best.score} | Chiến lược: ${strategy}).`);
+    return true;
   }
 
   function processAutoEvents() {
@@ -1055,12 +1186,21 @@
     const now = Date.now();
     if (now - lastEventClickTime < 900) return; // Debounce 900ms an toàn
 
-    // 1. Quét Dialog / Modal Sự Kiện THỰC SỰ (Chỉ quét modal thực sự, KHÔNG quét thẻ bài hay card)
+    const sim = extractSimFromDom();
+
+    // 1. Quét Dialog / Modal Sự Kiện THỰC SỰ
     const modals = document.querySelectorAll('div[class*="modal"], div[class*="dialog"], div[role="dialog"], div[class*="popup"]');
     for (const modal of modals) {
       if (modal.offsetParent === null && window.getComputedStyle(modal).display === 'none') continue;
       if (!isRealEventModal(modal)) continue;
 
+      // Ưu tiên 1: Nếu là modal có nhiều lựa chọn với nút "Chọn", dùng Smart Event Engine
+      if (userConfig.autoClickChoices) {
+        const handledBySmartEngine = evaluateAndChooseEventOption(modal, sim);
+        if (handledBySmartEngine) return;
+      }
+
+      // Ưu tiên 2: Modal thông báo / 1 nút hành động (Tiếp tục, Nhận thưởng, Đóng...)
       const buttons = modal.querySelectorAll('button, [role="button"], .btn');
       for (const btn of buttons) {
         if (btn.offsetParent === null || btn.disabled) continue;
@@ -1093,7 +1233,8 @@
           'bỏ qua',
           'chấp nhận',
           'xong',
-          'đóng'
+          'đóng',
+          'chọn'
         ];
 
         const isExactOrValidAction = validActionKeywords.some(kw => text === kw || text.startsWith(kw) || text.endsWith(kw));
@@ -1105,8 +1246,8 @@
         }
       }
 
-      // Nếu trong modal sự kiện có các nút lựa chọn phương án (.event-choices, .choices)
-      if (userConfig.autoClickChoices) {
+      // Ưu tiên 3: Container choices dạng cũ (nếu có .choices button)
+      if (userConfig.autoClickChoices && userConfig.eventChoiceStrategy !== 'manual') {
         const choiceContainer = modal.querySelector('[class*="choice"], [class*="option"], [class*="answer"]');
         if (choiceContainer) {
           const choiceBtn = choiceContainer.querySelector('button, [role="button"]');
