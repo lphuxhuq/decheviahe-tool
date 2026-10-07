@@ -55,44 +55,29 @@
   let shouldStop = false;
 
   // ==========================================
-  // DEEP SIM EXTRACTOR (ZERO-CLICK REACT FIBER BFS)
+  // DEEP SIM EXTRACTOR (ULTRA-SENSITIVE)
   // ==========================================
-  function scanFiberForSim(rootFiber, maxDepth = 25) {
-    if (!rootFiber) return null;
-    const queue = [{ fiber: rootFiber, depth: 0 }];
-    let visited = 0;
-
-    while (queue.length > 0 && visited < 1500) {
-      const { fiber, depth } = queue.shift();
-      visited++;
-
-      if (!fiber) continue;
-
-      // 1. Kiểm tra props
-      const props = fiber.memoizedProps;
-      if (props) {
-        if (props.sim && typeof props.sim.dealTargets === 'function') return props.sim;
-        for (const key of Object.keys(props)) {
-          const val = props[key];
+  function tryExtractSimFromFiber(fiber) {
+    let curr = fiber;
+    while (curr) {
+      // 1. Kiểm tra memoizedProps.sim
+      if (curr.memoizedProps?.sim && typeof curr.memoizedProps.sim.dealTargets === 'function') {
+        return curr.memoizedProps.sim;
+      }
+      // 2. Kiểm tra memoizedState.sim
+      if (curr.memoizedState?.sim && typeof curr.memoizedState.sim.dealTargets === 'function') {
+        return curr.memoizedState.sim;
+      }
+      // 3. Quét props properties
+      if (curr.memoizedProps) {
+        for (const k of Object.keys(curr.memoizedProps)) {
+          const val = curr.memoizedProps[k];
           if (val && typeof val === 'object' && typeof val.dealTargets === 'function') {
             return val;
           }
         }
       }
-
-      // 2. Kiểm tra state / stateNode
-      const state = fiber.memoizedState;
-      if (state && state.sim && typeof state.sim.dealTargets === 'function') {
-        return state.sim;
-      }
-      if (fiber.stateNode && typeof fiber.stateNode.dealTargets === 'function') {
-        return fiber.stateNode;
-      }
-
-      if (depth < maxDepth) {
-        if (fiber.child) queue.push({ fiber: fiber.child, depth: depth + 1 });
-        if (fiber.sibling) queue.push({ fiber: fiber.sibling, depth: depth });
-      }
+      curr = curr.return;
     }
     return null;
   }
@@ -109,22 +94,61 @@
       return cachedSim;
     }
 
-    // 1. Quét từ #root hoặc #app (Không cần người chơi mở sổ tay)
-    const domRoots = [
-      document.getElementById('root'),
-      document.getElementById('app'),
-      document.getElementById('journal-root'),
-      document.getElementById('books-root'),
-      document.querySelector('main'),
-      document.body
-    ];
+    // 1. Ưu tiên TUYỆT ĐỐI modal Sổ tay / Sân ga (#journal-root, #books-root) theo chuẩn v2.2.2
+    const modalIds = ['journal-root', 'books-root'];
+    for (const id of modalIds) {
+      const root = document.getElementById(id);
+      if (root) {
+        // Kiểm tra phần tử gốc
+        for (const k of Object.keys(root)) {
+          if (k.startsWith('__reactContainer$')) {
+            let fiber = root[k]?.current?.child;
+            while (fiber) {
+              if (fiber.memoizedProps?.sim && typeof fiber.memoizedProps.sim.dealTargets === 'function') {
+                cachedSim = fiber.memoizedProps.sim;
+                window.__dcvh_sim = cachedSim;
+                applyTimeMultiplier(cachedSim, window.__timeMultiplier);
+                return cachedSim;
+              }
+              fiber = fiber.child;
+            }
+          }
+          if (k.startsWith('__reactFiber$')) {
+            const found = tryExtractSimFromFiber(root[k]);
+            if (found) {
+              cachedSim = found;
+              window.__dcvh_sim = cachedSim;
+              applyTimeMultiplier(cachedSim, window.__timeMultiplier);
+              return cachedSim;
+            }
+          }
+        }
 
-    for (const el of domRoots) {
-      if (!el) continue;
-      for (const k of Object.keys(el)) {
-        if (k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$')) {
-          const rootFiber = el[k]?.current || el[k];
-          const found = scanFiberForSim(rootFiber);
+        // Kiểm tra con đầu tiên (firstChild) và toàn bộ con của modal
+        const children = [root.firstElementChild, ...Array.from(root.children)];
+        for (const child of children) {
+          if (!child) continue;
+          for (const k of Object.keys(child)) {
+            if (k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$')) {
+              const found = tryExtractSimFromFiber(child[k]);
+              if (found) {
+                cachedSim = found;
+                window.__dcvh_sim = cachedSim;
+                applyTimeMultiplier(cachedSim, window.__timeMultiplier);
+                return cachedSim;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Quét mở rộng tất cả các modal, dialog hoặc popup đang hiển thị
+    const generalModals = document.querySelectorAll('[role="dialog"], div[class*="modal"], div[class*="dialog"], div[id*="journal"]');
+    for (const m of generalModals) {
+      for (const k of Object.keys(m)) {
+        if (k.startsWith('__reactFiber$')) {
+          const found = tryExtractSimFromFiber(m[k]);
           if (found) {
             cachedSim = found;
             window.__dcvh_sim = cachedSim;
@@ -133,10 +157,55 @@
           }
         }
       }
+      if (m.firstElementChild) {
+        for (const k of Object.keys(m.firstElementChild)) {
+          if (k.startsWith('__reactFiber$')) {
+            const found = tryExtractSimFromFiber(m.firstElementChild[k]);
+            if (found) {
+              cachedSim = found;
+              window.__dcvh_sim = cachedSim;
+              applyTimeMultiplier(cachedSim, window.__timeMultiplier);
+              return cachedSim;
+            }
+          }
+        }
+      }
     }
 
     return null;
   }
+
+  // Tự động bắt Sim ngay lập tức khi người chơi click chuột vào bất kỳ đâu trong game!
+  window.addEventListener('click', e => {
+    if (cachedSim) return;
+    let target = e.target;
+    let depth = 0;
+    while (target && target !== document.body && depth < 10) {
+      for (const k of Object.keys(target)) {
+        if (k.startsWith('__reactFiber$')) {
+          const found = tryExtractSimFromFiber(target[k]);
+          if (found) {
+            cachedSim = found;
+            window.__dcvh_sim = cachedSim;
+            applyTimeMultiplier(cachedSim, window.__timeMultiplier);
+            updateWidgetStatus();
+            return;
+          }
+        }
+      }
+      target = target.parentElement;
+      depth++;
+    }
+  }, true);
+
+  // MutationObserver tự động bắt Sim ngay khi DOM chèn modal Sổ tay
+  const domObserver = new MutationObserver(() => {
+    if (!cachedSim) {
+      const found = extractSimFromDom();
+      if (found) updateWidgetStatus();
+    }
+  });
+  domObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
 
   // Hook sim.update để tua nhanh tốc độ game mượt mà
   function applyTimeMultiplier(sim, mult) {
