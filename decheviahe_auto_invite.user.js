@@ -55,57 +55,90 @@
   let shouldStop = false;
 
   // ==========================================
-  // DEEP SIM EXTRACTOR (ULTRA-SENSITIVE)
+  // DEEP SIM EXTRACTOR (ULTRA-RESILIENT)
   // ==========================================
+  // Nhận diện đối tượng Sim linh hoạt & toàn diện (không phụ thuộc riêng vào dealTargets)
+  function isSimObject(s) {
+    if (!s || typeof s !== 'object') return false;
+    if (typeof s.contact === 'function') return true;
+    if (typeof s.contactedToday === 'function') return true;
+    if (typeof s.dealTargets === 'function') return true;
+    if (typeof s.knownIds === 'function') return true;
+    if (typeof s.resident === 'function') return true;
+    if (typeof s.redeemCode === 'function') return true;
+    if (s.soc && (typeof s.soc.tier === 'function' || typeof s.soc.acquaintances === 'function')) return true;
+    if (typeof s.day === 'number' && (typeof s.coins === 'number' || typeof s.cash === 'number')) return true;
+    return false;
+  }
+
   function tryExtractSimFromFiber(fiber) {
     let curr = fiber;
-    while (curr) {
-      // 1. Kiểm tra memoizedProps.sim
-      if (curr.memoizedProps?.sim && typeof curr.memoizedProps.sim.dealTargets === 'function') {
-        return curr.memoizedProps.sim;
-      }
-      // 2. Kiểm tra memoizedState.sim
-      if (curr.memoizedState?.sim && typeof curr.memoizedState.sim.dealTargets === 'function') {
-        return curr.memoizedState.sim;
-      }
-      // 3. Quét props properties
+    let depth = 0;
+    while (curr && depth < 30) {
+      // 1. Kiểm tra memoizedProps
       if (curr.memoizedProps) {
+        if (isSimObject(curr.memoizedProps.sim)) return curr.memoizedProps.sim;
         for (const k of Object.keys(curr.memoizedProps)) {
           const val = curr.memoizedProps[k];
-          if (val && typeof val === 'object' && typeof val.dealTargets === 'function') {
-            return val;
-          }
+          if (isSimObject(val)) return val;
+        }
+      }
+      // 2. Kiểm tra memoizedState
+      if (curr.memoizedState) {
+        if (isSimObject(curr.memoizedState.sim)) return curr.memoizedState.sim;
+        let s = curr.memoizedState;
+        while (s) {
+          if (isSimObject(s.memoizedState)) return s.memoizedState;
+          s = s.next;
         }
       }
       curr = curr.return;
+      depth++;
     }
     return null;
   }
 
   function extractSimFromDom() {
-    if (cachedSim && typeof cachedSim.dealTargets === 'function') return cachedSim;
-    if (window.__dcvh_sim && typeof window.__dcvh_sim.dealTargets === 'function') {
+    if (isSimObject(cachedSim)) return cachedSim;
+    if (isSimObject(window.__dcvh_sim)) {
       cachedSim = window.__dcvh_sim;
       return cachedSim;
     }
-    if (window.sim && typeof window.sim.dealTargets === 'function') {
+    if (isSimObject(window.sim)) {
       cachedSim = window.sim;
       window.__dcvh_sim = cachedSim;
       return cachedSim;
     }
+    if (isSimObject(window.__sim)) {
+      cachedSim = window.__sim;
+      window.__dcvh_sim = cachedSim;
+      return cachedSim;
+    }
+    if (isSimObject(window.game?.sim)) {
+      cachedSim = window.game.sim;
+      window.__dcvh_sim = cachedSim;
+      return cachedSim;
+    }
 
-    // 1. Ưu tiên TUYỆT ĐỐI modal Sổ tay / Sân ga (#journal-root, #books-root) theo chuẩn v2.2.2
+    // 1. Ưu tiên TUYỆT ĐỐI modal Sổ tay / Sân ga (#journal-root, #books-root)
     const modalIds = ['journal-root', 'books-root'];
     for (const id of modalIds) {
       const root = document.getElementById(id);
       if (root) {
         // Kiểm tra phần tử gốc
         for (const k of Object.keys(root)) {
-          if (k.startsWith('__reactContainer$')) {
-            let fiber = root[k]?.current?.child;
+          if (k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$')) {
+            let fiber = root[k]?.current?.child || root[k];
             while (fiber) {
-              if (fiber.memoizedProps?.sim && typeof fiber.memoizedProps.sim.dealTargets === 'function') {
+              if (isSimObject(fiber.memoizedProps?.sim)) {
                 cachedSim = fiber.memoizedProps.sim;
+                window.__dcvh_sim = cachedSim;
+                applyTimeMultiplier(cachedSim, window.__timeMultiplier);
+                return cachedSim;
+              }
+              const found = tryExtractSimFromFiber(fiber);
+              if (found) {
+                cachedSim = found;
                 window.__dcvh_sim = cachedSim;
                 applyTimeMultiplier(cachedSim, window.__timeMultiplier);
                 return cachedSim;
@@ -113,18 +146,9 @@
               fiber = fiber.child;
             }
           }
-          if (k.startsWith('__reactFiber$')) {
-            const found = tryExtractSimFromFiber(root[k]);
-            if (found) {
-              cachedSim = found;
-              window.__dcvh_sim = cachedSim;
-              applyTimeMultiplier(cachedSim, window.__timeMultiplier);
-              return cachedSim;
-            }
-          }
         }
 
-        // Kiểm tra con đầu tiên (firstChild) và toàn bộ con của modal
+        // Kiểm tra con đầu tiên (firstChild) và các con của modal
         const children = [root.firstElementChild, ...Array.from(root.children)];
         for (const child of children) {
           if (!child) continue;
@@ -143,24 +167,15 @@
       }
     }
 
-    // 2. Quét mở rộng tất cả các modal, dialog hoặc popup đang hiển thị
-    const generalModals = document.querySelectorAll('[role="dialog"], div[class*="modal"], div[class*="dialog"], div[id*="journal"]');
-    for (const m of generalModals) {
-      for (const k of Object.keys(m)) {
-        if (k.startsWith('__reactFiber$')) {
-          const found = tryExtractSimFromFiber(m[k]);
-          if (found) {
-            cachedSim = found;
-            window.__dcvh_sim = cachedSim;
-            applyTimeMultiplier(cachedSim, window.__timeMultiplier);
-            return cachedSim;
-          }
-        }
-      }
-      if (m.firstElementChild) {
-        for (const k of Object.keys(m.firstElementChild)) {
+    // 2. Quét mở rộng tất cả các modal, dialog hoặc popup đang hiển thị trên DOM
+    const candidateModals = document.querySelectorAll('[role="dialog"], div[class*="modal"], div[class*="dialog"], div[id*="journal"], div[id*="book"]');
+    for (const m of candidateModals) {
+      if (m.closest('#dcvh-modal') || m.closest('#dcvh-auto-btn')) continue;
+      const nodes = [m, ...Array.from(m.querySelectorAll('button, div, section')).slice(0, 20)];
+      for (const node of nodes) {
+        for (const k of Object.keys(node)) {
           if (k.startsWith('__reactFiber$')) {
-            const found = tryExtractSimFromFiber(m.firstElementChild[k]);
+            const found = tryExtractSimFromFiber(node[k]);
             if (found) {
               cachedSim = found;
               window.__dcvh_sim = cachedSim;
@@ -181,6 +196,7 @@
     let target = e.target;
     let depth = 0;
     while (target && target !== document.body && depth < 10) {
+      if (target.closest && (target.closest('#dcvh-modal') || target.closest('#dcvh-auto-btn'))) break;
       for (const k of Object.keys(target)) {
         if (k.startsWith('__reactFiber$')) {
           const found = tryExtractSimFromFiber(target[k]);
@@ -673,7 +689,10 @@
       <div class="dcvh-status-card">
         <div class="dcvh-row">
           <span>Kết nối Game:</span>
-          <b id="dcvh-status-text" style="color: #46863d">Đang kết nối...</b>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <b id="dcvh-status-text" style="color: #46863d">Đang kết nối...</b>
+            <button id="dcvh-btn-reconnect" class="dcvh-tool-btn" style="padding: 2px 7px; font-size: 10.5px;" title="Bấm để quét cưỡng bức đối tượng game">🔄 Quét</button>
+          </div>
         </div>
         <div class="dcvh-row" style="margin-top: 3px;">
           <span>Tiền mặt hiện có:</span>
@@ -850,6 +869,27 @@
   modalEl.querySelector('#dcvh-btn-clearlog').onclick = () => {
     clearLog();
   };
+
+  const reconnectBtn = modalEl.querySelector('#dcvh-btn-reconnect');
+  if (reconnectBtn) {
+    reconnectBtn.onclick = () => {
+      appendLog('🔍 Đang cưỡng bức quét tìm đối tượng Game...');
+      const sim = extractSimFromDom();
+      if (sim) {
+        appendLog(`✅ Kết nối thành công! Ngày ${sim.day || 1}, Tiền: ${getPlayerCoins(sim)}k.`);
+      } else {
+        const jRoot = Boolean(document.getElementById('journal-root'));
+        const bRoot = Boolean(document.getElementById('books-root'));
+        const modalsCount = document.querySelectorAll('[role="dialog"], div[class*="modal"]').length;
+        appendLog(`⚠️ Chưa tìm thấy dữ liệu. Thông tin chẩn đoán:`);
+        appendLog(` • #journal-root tồn tại: ${jRoot ? 'CÓ' : 'KHÔNG'}`);
+        appendLog(` • #books-root tồn tại: ${bRoot ? 'CÓ' : 'KHÔNG'}`);
+        appendLog(` • Số modal trên màn hình: ${modalsCount}`);
+        appendLog(`👉 Bạn hãy mở Sổ tay dân cư lên, sau đó bấm lại nút "🔄 Quét" này!`);
+      }
+      updateWidgetStatus();
+    };
+  }
 
   // Speed selection
   modalEl.querySelectorAll('.dcvh-speed-btn').forEach(btn => {
